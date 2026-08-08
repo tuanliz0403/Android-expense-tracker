@@ -15,6 +15,11 @@ object BillSplitTextGenerator {
         appendLine()
         appendLine("Total: ${formatAud(split.totalCents)}")
         appendLine("${split.participants.size} people · ${formatAud(split.perPersonCents)} each")
+        if (split.lineItems.isNotEmpty()) {
+            appendLine()
+            appendLine("Included transactions")
+            split.lineItems.forEach { appendLine("• ${it.title} — ${formatAud(it.amountCents)}") }
+        }
         appendLine()
         val progress = when {
             split.isClosed -> "${split.paidCount} / ${split.participants.size} Paid — Closed ✓"

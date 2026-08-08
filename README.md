@@ -11,6 +11,7 @@ Expense Tracker is a native, offline Android app that totals card spending since
 - Manual transactions with an editable date and time
 - Parser preview, duplicate-safe CSV export/import, and local-data deletion
 - Bill splits with optional participant names, paid/unpaid status, exact-payment matching, and manual assignment
+- Split participants can be renamed, and people can be added or removed before repayments lock the original per-person amount
 - Confirmed high-resolution bill-split image previews with native Save and Share actions
 - Copyable payment-text previews with clipboard and native Messenger-compatible sharing
 - Separate Spending and Earnings tabs; incoming payments that do not match an active split count as earnings
@@ -21,7 +22,9 @@ Expense Tracker is a native, offline Android app that totals card spending since
 - Split counts always include you; repayments reduce the dashboard to your net personal spending
 - Unnamed splits auto-assign exact repayments in arrival order; named splits retain uncertain payments for manual assignment
 - Partially paid splits can be closed with the unpaid shares covered by you, then reopened for any chosen unpaid people while completed payments stay locked
+- A split can be cancelled back to a normal non-green transaction and split again later; real received payments are preserved as earnings
 - Sum & Split replaces selected rows with one titled combined transaction while preserving its original items internally
+- Combined splits show every included transaction in details and shared output, can include unpaid splits, and can be undone before repayments to choose a different combination
 - Android Back exits selection/actions first, returns other tabs to Spending, then exits from Spending
 - Locally saved default account name and PayID prefill future splits
 - Consistent light-blue Material 3 theme

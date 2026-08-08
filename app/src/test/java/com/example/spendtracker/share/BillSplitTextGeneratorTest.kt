@@ -2,6 +2,7 @@ package com.example.spendtracker.share
 
 import com.example.spendtracker.domain.model.BillSplitDetails
 import com.example.spendtracker.domain.model.BillSplitParticipant
+import com.example.spendtracker.domain.model.SplitLineItem
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,7 +24,11 @@ class BillSplitTextGeneratorTest {
                 BillSplitParticipant(3, "Sarah", false, false, false, null),
                 BillSplitParticipant(4, "Michael", false, false, false, null)
             ),
-            payments = emptyList()
+            payments = emptyList(),
+            lineItems = listOf(
+                SplitLineItem(10, "Restaurant", 3200, 1_754_611_100_000),
+                SplitLineItem(11, "Dessert", 1780, 1_754_611_200_000)
+            )
         )
 
         val text = BillSplitTextGenerator.generate(split, 1_754_611_200_000)
@@ -33,6 +38,8 @@ class BillSplitTextGeneratorTest {
         assertTrue(text.contains("○ Sarah — $12.45 owing"))
         assertTrue(text.contains("PayID: john@example.com"))
         assertTrue(text.contains("Account Name: John Smith"))
+        assertTrue(text.contains("Included transactions"))
+        assertTrue(text.contains("• Restaurant — $32.00"))
     }
 
     @Test fun `closed partial split keeps paid people and marks remaining people covered`() {

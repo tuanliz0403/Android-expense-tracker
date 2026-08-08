@@ -116,9 +116,9 @@ private fun HomeScreen(accessEnabled: Boolean, openSettingsPage: () -> Unit, ope
             if (selecting) item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton({ confirmDelete = true }, Modifier.weight(1f), enabled = selectedIds.isNotEmpty()) { Text("Delete") }
-                    Button({ showCombinedSplit = true }, Modifier.weight(1f), enabled = selectedTransactions.size >= 2 && selectedTransactions.none { it.hasSplit }) { Text("Sum & Split") }
+                    Button({ showCombinedSplit = true }, Modifier.weight(1f), enabled = selectedTransactions.size >= 2 && selectedTransactions.all { it.canBeCombined }) { Text("Sum & Split") }
                 }
-                if (selectedTransactions.any { it.hasSplit }) Text("Transactions already belonging to a split cannot be included in another split.", style = MaterialTheme.typography.bodySmall)
+                if (selectedTransactions.any { !it.canBeCombined }) Text("A split with recorded payments or a closed split cannot be combined.", style = MaterialTheme.typography.bodySmall)
             }
             if (snapshot.transactions.isEmpty()) item { Text("No transactions in this spending period yet.", modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp), textAlign = TextAlign.Center) }
             items(snapshot.transactions, key = { it.id }) { transaction ->
@@ -176,6 +176,9 @@ private fun HomeScreen(accessEnabled: Boolean, openSettingsPage: () -> Unit, ope
             onAssign = vm::assignPayment,
             onMarkPaid = vm::markParticipantPaid,
             onUndoPaid = vm::undoParticipantPaid,
+            onEditPeople = vm::editSplitParticipants,
+            onUndoCombination = vm::undoCombination,
+            onCancelSplit = vm::cancelSplit,
             onCloseSplit = vm::closeSplit,
             onReopenSplit = vm::reopenSplit
         )
@@ -271,10 +274,10 @@ private fun HistoryScreen(openSpending: () -> Unit, openEarnings: () -> Unit, op
                     Button(
                         { showCombinedSplit = true },
                         Modifier.weight(1f),
-                        enabled = selectedTransactions.size >= 2 && selectedTransactions.none { it.hasSplit }
+                        enabled = selectedTransactions.size >= 2 && selectedTransactions.all { it.canBeCombined }
                     ) { Text("Sum & Split") }
                 }
-                if (selectedTransactions.any { it.hasSplit }) Text("Transactions already belonging to a split cannot be included in another split.", style = MaterialTheme.typography.bodySmall)
+                if (selectedTransactions.any { !it.canBeCombined }) Text("A split with recorded payments or a closed split cannot be combined.", style = MaterialTheme.typography.bodySmall)
             }
             if (transactions.isEmpty()) item { Text("No transaction history yet.", Modifier.fillMaxWidth().padding(vertical = 32.dp), textAlign = TextAlign.Center) }
             items(transactions, key = { it.id }) { transaction ->
@@ -319,6 +322,9 @@ private fun HistoryScreen(openSpending: () -> Unit, openEarnings: () -> Unit, op
             onAssign = vm::assignPayment,
             onMarkPaid = vm::markParticipantPaid,
             onUndoPaid = vm::undoParticipantPaid,
+            onEditPeople = vm::editSplitParticipants,
+            onUndoCombination = vm::undoCombination,
+            onCancelSplit = vm::cancelSplit,
             onCloseSplit = vm::closeSplit,
             onReopenSplit = vm::reopenSplit
         )
@@ -339,6 +345,9 @@ private fun HistoryScreen(openSpending: () -> Unit, openEarnings: () -> Unit, op
         }
     )
 }
+
+private val Transaction.canBeCombined: Boolean
+    get() = !hasSplit || (!splitClosed && splitPaidCount <= 1 && splitPaymentCount == 0)
 
 @Composable
 private fun DeleteTransactionsDialog(count: Int, onDismiss: () -> Unit, onDelete: () -> Unit) {

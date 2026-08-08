@@ -30,7 +30,8 @@ interface SpendTrackerDao {
         SELECT t.*,
           COALESCE((SELECT COUNT(*) FROM bill_split_participants p WHERE p.splitId = b.id AND p.isWaived = 0), 0) AS splitParticipantCount,
           COALESCE((SELECT COUNT(*) FROM bill_split_participants p WHERE p.splitId = b.id AND p.isPaid = 1 AND p.isWaived = 0), 0) AS splitPaidCount,
-          COALESCE(b.isClosed, 0) AS splitClosed
+          COALESCE(b.isClosed, 0) AS splitClosed,
+          COALESCE((SELECT COUNT(*) FROM incoming_payments ip WHERE ip.splitId = b.id), 0) AS splitPaymentCount
         FROM transactions t
         LEFT JOIN bill_split_transactions bst ON bst.transactionId = t.id
         LEFT JOIN bill_splits b ON b.id = bst.splitId
@@ -52,6 +53,7 @@ interface SpendTrackerDao {
             INNER JOIN transactions t ON t.id = bst.transactionId
             WHERE bst.splitId = b.id
               AND t.deletedAt IS NULL
+              AND t.combinedIntoTransactionId IS NULL
               AND (t.transactionTimestamp >= :startedAt OR t.importedIntoPeriodStartedAt = :startedAt)
         )
     """)
@@ -61,7 +63,8 @@ interface SpendTrackerDao {
         SELECT t.*,
           COALESCE((SELECT COUNT(*) FROM bill_split_participants p WHERE p.splitId = b.id AND p.isWaived = 0), 0) AS splitParticipantCount,
           COALESCE((SELECT COUNT(*) FROM bill_split_participants p WHERE p.splitId = b.id AND p.isPaid = 1 AND p.isWaived = 0), 0) AS splitPaidCount,
-          COALESCE(b.isClosed, 0) AS splitClosed
+          COALESCE(b.isClosed, 0) AS splitClosed,
+          COALESCE((SELECT COUNT(*) FROM incoming_payments ip WHERE ip.splitId = b.id), 0) AS splitPaymentCount
         FROM transactions t
         LEFT JOIN bill_split_transactions bst ON bst.transactionId = t.id
         LEFT JOIN bill_splits b ON b.id = bst.splitId
@@ -75,7 +78,8 @@ interface SpendTrackerDao {
         SELECT t.*,
           COALESCE((SELECT COUNT(*) FROM bill_split_participants p WHERE p.splitId = b.id AND p.isWaived = 0), 0) AS splitParticipantCount,
           COALESCE((SELECT COUNT(*) FROM bill_split_participants p WHERE p.splitId = b.id AND p.isPaid = 1 AND p.isWaived = 0), 0) AS splitPaidCount,
-          COALESCE(b.isClosed, 0) AS splitClosed
+          COALESCE(b.isClosed, 0) AS splitClosed,
+          COALESCE((SELECT COUNT(*) FROM incoming_payments ip WHERE ip.splitId = b.id), 0) AS splitPaymentCount
         FROM transactions t
         LEFT JOIN bill_split_transactions bst ON bst.transactionId = t.id
         LEFT JOIN bill_splits b ON b.id = bst.splitId
@@ -114,6 +118,15 @@ interface SpendTrackerDao {
     @Query("UPDATE transactions SET combinedIntoTransactionId = NULL WHERE combinedIntoTransactionId IN (:combinedIds)")
     suspend fun restoreTransactionsFromCombined(combinedIds: List<Long>)
 
+    @Query("SELECT * FROM transactions WHERE combinedIntoTransactionId = :combinedId ORDER BY transactionTimestamp")
+    suspend fun transactionsInCombined(combinedId: Long): List<TransactionEntity>
+
+    @Query("SELECT * FROM transactions WHERE combinedIntoTransactionId = :combinedId ORDER BY transactionTimestamp")
+    fun observeTransactionsInCombined(combinedId: Long): Flow<List<TransactionEntity>>
+
+    @Query("DELETE FROM transactions WHERE id = :transactionId")
+    suspend fun hardDeleteTransaction(transactionId: Long): Int
+
     @Query("DELETE FROM bill_splits WHERE id IN (SELECT splitId FROM bill_split_transactions WHERE transactionId IN (:transactionIds))")
     suspend fun deleteSplitsForTransactions(transactionIds: List<Long>): Int
 
@@ -146,7 +159,7 @@ interface SpendTrackerDao {
           AND EXISTS (
               SELECT 1 FROM bill_split_transactions bst
               INNER JOIN transactions t ON t.id = bst.transactionId
-              WHERE bst.splitId = b.id AND t.deletedAt IS NULL
+              WHERE bst.splitId = b.id AND t.deletedAt IS NULL AND t.combinedIntoTransactionId IS NULL
           )
           AND EXISTS (SELECT 1 FROM bill_split_participants p WHERE p.splitId = b.id AND p.isPaid = 0 AND p.isWaived = 0)
     """)
@@ -154,6 +167,21 @@ interface SpendTrackerDao {
 
     @Query("SELECT * FROM bill_split_participants WHERE splitId = :splitId AND isPaid = 0 AND isWaived = 0")
     suspend fun unpaidParticipants(splitId: Long): List<BillSplitParticipantEntity>
+
+    @Query("SELECT * FROM bill_split_participants WHERE splitId = :splitId ORDER BY id")
+    suspend fun participantsForSplit(splitId: Long): List<BillSplitParticipantEntity>
+
+    @Query("SELECT COUNT(*) FROM incoming_payments WHERE splitId = :splitId")
+    suspend fun paymentCountForSplit(splitId: Long): Int
+
+    @Query("UPDATE bill_split_participants SET name = :name WHERE id = :participantId AND splitId = :splitId AND isOwner = 0")
+    suspend fun renameParticipant(splitId: Long, participantId: Long, name: String): Int
+
+    @Query("DELETE FROM bill_split_participants WHERE id = :participantId AND splitId = :splitId AND isOwner = 0 AND isPaid = 0")
+    suspend fun deleteUnpaidParticipant(splitId: Long, participantId: Long): Int
+
+    @Query("UPDATE bill_splits SET perPersonCents = :perPersonCents, autoAssignAnonymous = :autoAssignAnonymous WHERE id = :splitId")
+    suspend fun updateSplitPeopleSettings(splitId: Long, perPersonCents: Long, autoAssignAnonymous: Boolean): Int
 
     @Query("SELECT * FROM bill_split_participants WHERE splitId = :splitId AND isPaid = 0 AND isWaived = 1 AND isOwner = 0")
     suspend fun unpaidParticipantsForReopen(splitId: Long): List<BillSplitParticipantEntity>
@@ -166,6 +194,12 @@ interface SpendTrackerDao {
 
     @Query("UPDATE bill_splits SET isClosed = 0 WHERE id = :splitId")
     suspend fun reopenSplit(splitId: Long): Int
+
+    @Query("UPDATE incoming_payments SET splitId = NULL, participantId = NULL, countsAsIncome = 1 WHERE splitId = :splitId")
+    suspend fun preservePaymentsAsIncome(splitId: Long): Int
+
+    @Query("DELETE FROM bill_splits WHERE id = :splitId")
+    suspend fun deleteSplit(splitId: Long): Int
 
     @Query("UPDATE bill_split_participants SET isWaived = 0 WHERE splitId = :splitId AND id IN (:participantIds) AND isPaid = 0")
     suspend fun reactivateParticipants(splitId: Long, participantIds: List<Long>): Int
@@ -187,6 +221,9 @@ interface SpendTrackerDao {
 
     @Query("SELECT * FROM bill_splits WHERE id = :splitId LIMIT 1")
     suspend fun splitById(splitId: Long): BillSplitEntity?
+
+    @Query("SELECT * FROM bill_splits WHERE transactionId = :transactionId LIMIT 1")
+    suspend fun splitForTransaction(transactionId: Long): BillSplitEntity?
 
     @Query("SELECT * FROM incoming_payments WHERE id = :paymentId LIMIT 1")
     suspend fun paymentById(paymentId: Long): IncomingPaymentEntity?
@@ -226,7 +263,8 @@ data class TransactionWithSplitStatus(
     val createdAt: Long,
     val splitParticipantCount: Int,
     val splitPaidCount: Int,
-    val splitClosed: Boolean
+    val splitClosed: Boolean,
+    val splitPaymentCount: Int
 )
 
 data class BillSplitAggregate(
@@ -234,5 +272,7 @@ data class BillSplitAggregate(
     @Relation(parentColumn = "id", entityColumn = "splitId")
     val participants: List<BillSplitParticipantEntity>,
     @Relation(parentColumn = "id", entityColumn = "splitId")
-    val payments: List<IncomingPaymentEntity>
+    val payments: List<IncomingPaymentEntity>,
+    @Relation(parentColumn = "transactionId", entityColumn = "combinedIntoTransactionId")
+    val includedTransactions: List<TransactionEntity>
 )

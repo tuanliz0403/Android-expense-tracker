@@ -8,6 +8,7 @@ import com.example.spendtracker.domain.model.SpendingSnapshot
 import com.example.spendtracker.domain.model.BillSplitDetails
 import com.example.spendtracker.domain.model.Transaction
 import com.example.spendtracker.domain.model.IncomeSnapshot
+import com.example.spendtracker.domain.model.SplitParticipantEdit
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -33,8 +35,9 @@ class HomeViewModel @Inject constructor(private val repository: SpendingReposito
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val selectedSplit = selectedTransactionId.flatMapLatest { id ->
         if (id == null) flowOf(SelectedSplitState())
-        else repository.observeSplit(id)
-            .map { SelectedSplitState(id, it, false) }
+        else combine(repository.observeSplit(id), repository.observeCombinedLineItems(id)) { split, lineItems ->
+            SelectedSplitState(id, split, false, lineItems)
+        }
             .onStart { emit(SelectedSplitState(id, null, true)) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SelectedSplitState())
 
@@ -66,6 +69,11 @@ class HomeViewModel @Inject constructor(private val repository: SpendingReposito
     fun reopenSplit(splitId: Long, participantIds: Set<Long>) = viewModelScope.launch {
         repository.reopenSplit(splitId, participantIds)
     }
+    fun cancelSplit(splitId: Long) = viewModelScope.launch { repository.cancelSplit(splitId) }
+    fun editSplitParticipants(splitId: Long, edits: List<SplitParticipantEdit>) = viewModelScope.launch {
+        repository.editSplitParticipants(splitId, edits)
+    }
+    fun undoCombination(transactionId: Long) = viewModelScope.launch { repository.undoCombination(transactionId) }
     private fun savePaymentDetails(accountName: String, payId: String) {
         settings.accountName = accountName
         settings.payId = payId
@@ -75,5 +83,6 @@ class HomeViewModel @Inject constructor(private val repository: SpendingReposito
 data class SelectedSplitState(
     val transactionId: Long? = null,
     val details: BillSplitDetails? = null,
-    val loading: Boolean = false
+    val loading: Boolean = false,
+    val lineItems: List<com.example.spendtracker.domain.model.SplitLineItem> = emptyList()
 )

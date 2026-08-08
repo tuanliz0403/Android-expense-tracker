@@ -8,11 +8,19 @@ data class Transaction(
     val source: String,
     val splitParticipantCount: Int = 0,
     val splitPaidCount: Int = 0,
-    val splitClosed: Boolean = false
+    val splitClosed: Boolean = false,
+    val splitPaymentCount: Int = 0
 ) {
     val hasSplit: Boolean get() = splitParticipantCount > 0
     val splitCompleted: Boolean get() = hasSplit && (splitClosed || splitPaidCount == splitParticipantCount)
 }
+
+data class SplitLineItem(
+    val id: Long,
+    val title: String,
+    val amountCents: Long,
+    val timestamp: Long
+)
 
 data class BillSplitParticipant(
     val id: Long,
@@ -21,6 +29,11 @@ data class BillSplitParticipant(
     val isWaived: Boolean,
     val isPaid: Boolean,
     val paidAt: Long?
+)
+
+data class SplitParticipantEdit(
+    val id: Long?,
+    val name: String
 )
 
 data class IncomingPayment(
@@ -49,7 +62,8 @@ data class BillSplitDetails(
     val autoAssignAnonymous: Boolean,
     val isClosed: Boolean,
     val participants: List<BillSplitParticipant>,
-    val payments: List<IncomingPayment>
+    val payments: List<IncomingPayment>,
+    val lineItems: List<SplitLineItem> = emptyList()
 ) {
     val paidCount get() = participants.count { it.isPaid }
     val activeParticipants get() = participants.filterNot { it.isWaived }

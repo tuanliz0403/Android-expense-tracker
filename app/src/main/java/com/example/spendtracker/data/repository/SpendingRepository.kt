@@ -17,6 +17,8 @@ import com.example.spendtracker.domain.model.IncomeSnapshot
 import com.example.spendtracker.domain.model.IncomeRules
 import com.example.spendtracker.domain.model.SpendingSnapshot
 import com.example.spendtracker.domain.model.Transaction
+import com.example.spendtracker.domain.model.SplitParticipantEdit
+import com.example.spendtracker.domain.model.SplitLineItem
 import com.example.spendtracker.domain.model.SpendingRules
 import com.example.spendtracker.domain.parser.DuplicateDetector
 import com.example.spendtracker.domain.parser.TransactionCsv
@@ -37,19 +39,24 @@ class SpendingRepository @Inject constructor(private val database: SpendTrackerD
         combine(dao.observeTransactionsSince(start), dao.observeReimbursementsSince(start)) { rows, reimbursements ->
             SpendingSnapshot(
                 start,
-                rows.map { Transaction(it.id, it.merchant, it.amountCents, it.transactionTimestamp, it.source, it.splitParticipantCount, it.splitPaidCount, it.splitClosed) },
+                rows.map { Transaction(it.id, it.merchant, it.amountCents, it.transactionTimestamp, it.source, it.splitParticipantCount, it.splitPaidCount, it.splitClosed, it.splitPaymentCount) },
                 reimbursements
             )
         }
     }
 
     fun observeAllTransactions(): Flow<List<Transaction>> = dao.observeAllTransactions().map { rows ->
-        rows.map { Transaction(it.id, it.merchant, it.amountCents, it.transactionTimestamp, it.source, it.splitParticipantCount, it.splitPaidCount, it.splitClosed) }
+        rows.map { Transaction(it.id, it.merchant, it.amountCents, it.transactionTimestamp, it.source, it.splitParticipantCount, it.splitPaidCount, it.splitClosed, it.splitPaymentCount) }
     }
 
     fun observeDeletedTransactions(): Flow<List<Transaction>> = dao.observeDeletedTransactions().map { rows ->
-        rows.map { Transaction(it.id, it.merchant, it.amountCents, it.transactionTimestamp, it.source, it.splitParticipantCount, it.splitPaidCount, it.splitClosed) }
+        rows.map { Transaction(it.id, it.merchant, it.amountCents, it.transactionTimestamp, it.source, it.splitParticipantCount, it.splitPaidCount, it.splitClosed, it.splitPaymentCount) }
     }
+
+    fun observeCombinedLineItems(transactionId: Long): Flow<List<SplitLineItem>> =
+        dao.observeTransactionsInCombined(transactionId).map { rows ->
+            rows.map { SplitLineItem(it.id, it.merchant, it.amountCents, it.transactionTimestamp) }
+        }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun observeIncomeSnapshot(): Flow<IncomeSnapshot> = dao.observeCurrentIncomePeriod().flatMapLatest { period ->
@@ -78,6 +85,9 @@ class SpendingRepository @Inject constructor(private val database: SpendTrackerD
                 },
                 payments = it.payments.sortedByDescending { payment -> payment.receivedAt }.map { payment ->
                     IncomingPayment(payment.id, payment.senderName, payment.amountCents, payment.receivedAt, payment.participantId)
+                },
+                lineItems = it.includedTransactions.sortedBy { item -> item.transactionTimestamp }.map { item ->
+                    SplitLineItem(item.id, item.merchant, item.amountCents, item.transactionTimestamp)
                 }
             )
         } }
@@ -101,6 +111,22 @@ class SpendingRepository @Inject constructor(private val database: SpendTrackerD
         require(transactions.isNotEmpty())
         require(participantNames.isNotEmpty())
         require(accountName.isNotBlank() && payId.isNotBlank())
+        require(transactions.all { transaction ->
+            !transaction.hasSplit || (!transaction.splitClosed && transaction.splitPaidCount <= 1 && transaction.splitPaymentCount == 0)
+        })
+        val componentIds = mutableListOf<Long>()
+        transactions.forEach { transaction ->
+            if (transaction.source == "COMBINED_SPLIT") {
+                val children = dao.transactionsInCombined(transaction.id)
+                require(children.isNotEmpty())
+                dao.restoreTransactionsFromCombined(listOf(transaction.id))
+                dao.deleteSplitsForTransactions(listOf(transaction.id))
+                check(dao.hardDeleteTransaction(transaction.id) == 1)
+                componentIds.addAll(children.map { it.id })
+            } else {
+                componentIds.add(transaction.id)
+            }
+        }
         val totalCents = transactions.sumOf { it.amountCents }
         val perPerson = totalCents / (participantNames.size + 1)
         require(perPerson > 0)
@@ -117,7 +143,7 @@ class SpendingRepository @Inject constructor(private val database: SpendTrackerD
                 importedIntoPeriodStartedAt = currentPeriodStart
             ))
             check(combinedId != -1L)
-            dao.hideTransactionsInCombined(transactions.map { it.id }, combinedId)
+            dao.hideTransactionsInCombined(componentIds, combinedId)
             Transaction(combinedId, splitTitle, totalCents, timestamp, "COMBINED_SPLIT")
         }
         val splitId = dao.insertSplit(BillSplitEntity(
@@ -197,6 +223,59 @@ class SpendingRepository @Inject constructor(private val database: SpendTrackerD
         require(participantIds.all { it in allowed })
         dao.reactivateParticipants(split.id, participantIds.toList())
         dao.reopenSplit(split.id)
+    }
+
+    suspend fun cancelSplit(splitId: Long) = database.withTransaction {
+        requireNotNull(dao.splitById(splitId))
+        dao.preservePaymentsAsIncome(splitId)
+        check(dao.deleteSplit(splitId) == 1)
+    }
+
+    suspend fun editSplitParticipants(splitId: Long, edits: List<SplitParticipantEdit>) = database.withTransaction {
+        require(edits.isNotEmpty() && edits.size <= 49)
+        val split = requireNotNull(dao.splitById(splitId))
+        val existing = dao.participantsForSplit(splitId).filterNot { it.isOwner }
+        val existingById = existing.associateBy { it.id }
+        val retainedIds = edits.mapNotNull { it.id }.toSet()
+        require(retainedIds.size == edits.count { it.id != null })
+        require(retainedIds.all { it in existingById })
+
+        val countChanged = edits.size != existing.size || retainedIds != existingById.keys
+        if (countChanged) {
+            require(!split.isClosed)
+            require(existing.none { it.isPaid })
+            require(dao.paymentCountForSplit(splitId) == 0)
+        }
+
+        val anonymous = edits.all { it.name.isBlank() }
+        edits.forEachIndexed { index, edit ->
+            val storedName = edit.name.trim().ifBlank { "Any sender ${index + 1}" }
+            edit.id?.let { dao.renameParticipant(splitId, it, storedName) }
+        }
+        existing.filter { it.id !in retainedIds }.forEach {
+            check(dao.deleteUnpaidParticipant(splitId, it.id) == 1)
+        }
+        val additions = edits.mapIndexedNotNull { index, edit ->
+            if (edit.id != null) null else BillSplitParticipantEntity(
+                splitId = splitId,
+                name = edit.name.trim().ifBlank { "Any sender ${index + 1}" }
+            )
+        }
+        if (additions.isNotEmpty()) dao.insertParticipants(additions)
+        val perPersonCents = split.totalCents / (edits.size + 1)
+        require(perPersonCents > 0)
+        check(dao.updateSplitPeopleSettings(splitId, perPersonCents, anonymous) == 1)
+    }
+
+    suspend fun undoCombination(transactionId: Long) = database.withTransaction {
+        val split = dao.splitForTransaction(transactionId)
+        if (split != null) {
+            require(dao.paymentCountForSplit(split.id) == 0)
+            require(dao.participantsForSplit(split.id).none { !it.isOwner && it.isPaid })
+        }
+        dao.restoreTransactionsFromCombined(listOf(transactionId))
+        if (split != null) dao.deleteSplitsForTransactions(listOf(transactionId))
+        check(dao.hardDeleteTransaction(transactionId) == 1)
     }
 
     suspend fun ensurePeriod(now: Long = System.currentTimeMillis()) = database.withTransaction {

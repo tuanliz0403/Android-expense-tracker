@@ -21,7 +21,7 @@ object BillSplitImageGenerator {
     private const val PAD = 104f
 
     fun generate(split: BillSplitDetails, transactionTimestamp: Long): Bitmap {
-        val height = (1120 + split.participants.size * 104).coerceAtLeast(1480)
+        val height = (1120 + split.participants.size * 104 + split.lineItems.size * 82).coerceAtLeast(1480)
         val bitmap = Bitmap.createBitmap(WIDTH, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(Color.rgb(238, 244, 240))
@@ -57,6 +57,10 @@ object BillSplitImageGenerator {
         text("Total: ${formatAud(split.totalCents)}", 42f, bold = true, gap = 72f)
         text("${split.participants.size} people", 34f, Color.DKGRAY, gap = 68f)
         text("${formatAud(split.perPersonCents)} each", 78f, Color.rgb(20, 112, 72), bold = true, gap = 104f)
+        if (split.lineItems.isNotEmpty()) {
+            text("Included transactions", 40f, bold = true, gap = 66f)
+            split.lineItems.forEach { item -> text("• ${item.title} — ${formatAud(item.amountCents)}", 32f, Color.DKGRAY, gap = 62f) }
+        }
         divider()
         val progress = when {
             split.isClosed -> "${split.paidCount} / ${split.participants.size} Paid — Closed ✓"
