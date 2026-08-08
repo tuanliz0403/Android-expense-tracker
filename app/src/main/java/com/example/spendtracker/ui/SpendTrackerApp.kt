@@ -30,9 +30,10 @@ import com.example.spendtracker.domain.parser.CurrencyParser
 import com.example.spendtracker.ui.home.HomeViewModel
 import com.example.spendtracker.ui.settings.SettingsViewModel
 import com.example.spendtracker.domain.model.Transaction
+import com.example.spendtracker.domain.model.calculateDailySpending
 import java.util.Calendar
 
-private enum class Page { HOME, EARNINGS, HISTORY, SETTINGS, RECYCLE_BIN }
+private enum class Page { HOME, DASHBOARD, EARNINGS, HISTORY, SETTINGS, RECYCLE_BIN }
 
 @Composable
 fun SpendTrackerApp(notificationAccessEnabled: Boolean, openNotificationSettings: () -> Unit) {
@@ -44,9 +45,10 @@ fun SpendTrackerApp(notificationAccessEnabled: Boolean, openNotificationSettings
     var page by rememberSaveable { mutableStateOf(Page.HOME) }
     BackHandler(enabled = page != Page.HOME) { page = Page.HOME }
     when (page) {
-        Page.HOME -> HomeScreen(notificationAccessEnabled, { page = Page.SETTINGS }, openNotificationSettings, { page = Page.EARNINGS }, { page = Page.HISTORY })
-        Page.EARNINGS -> EarningsScreen({ page = Page.HOME }, { page = Page.HISTORY }, { page = Page.SETTINGS })
-        Page.HISTORY -> HistoryScreen({ page = Page.HOME }, { page = Page.EARNINGS }, { page = Page.SETTINGS })
+        Page.HOME -> HomeScreen(notificationAccessEnabled, { page = Page.SETTINGS }, openNotificationSettings, { page = Page.DASHBOARD }, { page = Page.EARNINGS }, { page = Page.HISTORY })
+        Page.DASHBOARD -> DashboardScreen({ page = Page.HOME }, { page = Page.EARNINGS }, { page = Page.HISTORY }, { page = Page.SETTINGS })
+        Page.EARNINGS -> EarningsScreen({ page = Page.HOME }, { page = Page.DASHBOARD }, { page = Page.HISTORY }, { page = Page.SETTINGS })
+        Page.HISTORY -> HistoryScreen({ page = Page.HOME }, { page = Page.DASHBOARD }, { page = Page.EARNINGS }, { page = Page.SETTINGS })
         Page.SETTINGS -> SettingsScreen(
             accessEnabled = notificationAccessEnabled,
             openNotificationSettings = openNotificationSettings,
@@ -75,7 +77,7 @@ private fun OnboardingScreen(openSettings: () -> Unit, continueWithout: () -> Un
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun HomeScreen(accessEnabled: Boolean, openSettingsPage: () -> Unit, openNotificationSettings: () -> Unit, openEarnings: () -> Unit, openHistory: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
+private fun HomeScreen(accessEnabled: Boolean, openSettingsPage: () -> Unit, openNotificationSettings: () -> Unit, openDashboard: () -> Unit, openEarnings: () -> Unit, openHistory: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
     val snapshot by vm.snapshot.collectAsStateWithLifecycle()
     val selectedSplit by vm.selectedSplit.collectAsStateWithLifecycle()
     var showReset by remember { mutableStateOf(false) }
@@ -95,7 +97,7 @@ private fun HomeScreen(accessEnabled: Boolean, openSettingsPage: () -> Unit, ope
                 else IconButton(openSettingsPage) { Icon(Icons.Default.Settings, "Settings") }
             }
         ) },
-        bottomBar = { MainBottomBar(Page.HOME, {}, openEarnings, openHistory) },
+        bottomBar = { MainBottomBar(Page.HOME, {}, openDashboard, openEarnings, openHistory) },
         floatingActionButton = { if (!selecting) ExtendedFloatingActionButton(onClick = { showAdd = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Add Transaction") }) }
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -194,12 +196,12 @@ private fun HomeScreen(accessEnabled: Boolean, openSettingsPage: () -> Unit, ope
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EarningsScreen(openSpending: () -> Unit, openHistory: () -> Unit, openSettingsPage: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
+private fun EarningsScreen(openSpending: () -> Unit, openDashboard: () -> Unit, openHistory: () -> Unit, openSettingsPage: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
     val income by vm.incomeSnapshot.collectAsStateWithLifecycle()
     var showReset by remember { mutableStateOf(false) }
     Scaffold(
         topBar = { TopAppBar(title = { Text("Earnings", fontWeight = FontWeight.Bold) }, actions = { IconButton(openSettingsPage) { Icon(Icons.Default.Settings, "Settings") } }) },
-        bottomBar = { MainBottomBar(Page.EARNINGS, openSpending, {}, openHistory) }
+        bottomBar = { MainBottomBar(Page.EARNINGS, openSpending, openDashboard, {}, openHistory) }
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item { Text(if (income.periodStartedAt > 0) "Income period since ${formatAustralianDate(income.periodStartedAt)}" else "Starting current income period…") }
@@ -233,17 +235,73 @@ private fun EarningsScreen(openSpending: () -> Unit, openHistory: () -> Unit, op
 }
 
 @Composable
-private fun MainBottomBar(selectedPage: Page, openSpending: () -> Unit, openEarnings: () -> Unit, openHistory: () -> Unit) {
+private fun MainBottomBar(selectedPage: Page, openSpending: () -> Unit, openDashboard: () -> Unit, openEarnings: () -> Unit, openHistory: () -> Unit) {
     NavigationBar {
         NavigationBarItem(selected = selectedPage == Page.HOME, onClick = openSpending, icon = { Text("$") }, label = { Text("Spending") })
+        NavigationBarItem(selected = selectedPage == Page.DASHBOARD, onClick = openDashboard, icon = { Text("▥") }, label = { Text("Daily") })
         NavigationBarItem(selected = selectedPage == Page.EARNINGS, onClick = openEarnings, icon = { Text("+") }, label = { Text("Earnings") })
         NavigationBarItem(selected = selectedPage == Page.HISTORY, onClick = openHistory, icon = { Text("≡") }, label = { Text("History") })
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DashboardScreen(
+    openSpending: () -> Unit,
+    openEarnings: () -> Unit,
+    openHistory: () -> Unit,
+    openSettingsPage: () -> Unit,
+    vm: HomeViewModel = hiltViewModel()
+) {
+    val snapshot by vm.snapshot.collectAsStateWithLifecycle()
+    val summary = remember(snapshot) {
+        calculateDailySpending(snapshot.transactions, snapshot.periodStartedAt)
+    }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Daily dashboard", fontWeight = FontWeight.Bold) },
+                actions = { IconButton(openSettingsPage) { Icon(Icons.Default.Settings, "Settings") } }
+            )
+        },
+        bottomBar = { MainBottomBar(Page.DASHBOARD, openSpending, {}, openEarnings, openHistory) }
+    ) { padding ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Card(
+                    Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Average spending each day")
+                        Text(formatAud(summary.averageCents), style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Across ${summary.days.size} day${if (summary.days.size == 1) "" else "s"} in this spending period, including days with no spending.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+            item {
+                Text("Spending by day", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            }
+            if (summary.days.isEmpty()) item {
+                Text("Starting current spending period…", Modifier.fillMaxWidth().padding(vertical = 32.dp), textAlign = TextAlign.Center)
+            }
+            if (summary.days.isNotEmpty()) item {
+                DailySpendingChart(summary.days.asReversed(), Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun HistoryScreen(openSpending: () -> Unit, openEarnings: () -> Unit, openSettingsPage: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
+private fun HistoryScreen(openSpending: () -> Unit, openDashboard: () -> Unit, openEarnings: () -> Unit, openSettingsPage: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
     val transactions by vm.allTransactions.collectAsStateWithLifecycle()
     val selectedSplit by vm.selectedSplit.collectAsStateWithLifecycle()
     var selectedTransaction by remember { mutableStateOf<Transaction?>(null) }
@@ -263,7 +321,7 @@ private fun HistoryScreen(openSpending: () -> Unit, openEarnings: () -> Unit, op
                 }
             )
         },
-        bottomBar = { MainBottomBar(Page.HISTORY, openSpending, openEarnings, {}) }
+        bottomBar = { MainBottomBar(Page.HISTORY, openSpending, openDashboard, openEarnings, {}) }
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp)) {
             item { Text("Includes transactions from previous reset periods and CSV imports.", Modifier.padding(bottom = 12.dp)) }
